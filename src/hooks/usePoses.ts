@@ -11,16 +11,9 @@ export function usePoses() {
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
-  // Load poses and favorites on mount
-  useEffect(() => {
-    loadPoses();
-    loadFavorites();
-  }, []);
-
   // Load poses from seed data
   const loadPoses = useCallback(() => {
     setLoading(true);
-    // In a real app, this might fetch from an API or database
     setPoses(seedPoses);
     setFilteredPoses(seedPoses);
     setLoading(false);
@@ -35,6 +28,12 @@ export function usePoses() {
       console.error('Error loading favorites:', error);
     }
   }, []);
+
+  // Load poses and favorites on mount
+  useEffect(() => {
+    loadPoses();
+    loadFavorites();
+  }, [loadPoses, loadFavorites]);
 
   // Apply filter whenever filter or poses changes
   useEffect(() => {

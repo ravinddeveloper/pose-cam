@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,15 +13,18 @@ import {
 import { CameraView, CameraType, FlashMode, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter, useIsFocused } from 'expo-router';
-import { seedPoses } from '../../src/data/seedPoses';
-import { Pose } from '../../src/types/pose';
 import { NormalizedLandmark } from '../../src/types/landmarks';
-import { PoseMatchingService } from '../../src/services/poseMatchingService';
 import { PoseLandmarkerService } from '../../src/services/poseDetection/poseLandmarkerService';
-import { PoseStickFigure } from '../../src/components/PoseStickFigure';
+import { PoseContourSilhouette } from '../../src/components/PoseContourSilhouette';
+import { PoseOutlineThumbnail } from '../../src/components/PoseOutlineThumbnail';
+import { PosePackSelectorModal } from '../../src/components/PosePackSelectorModal';
+import { POSE_PACKS, PosePackItem } from '../../src/data/posePacks';
 import { SkeletonOverlay } from '../../src/components/SkeletonOverlay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// Flatten all available contour poses across packs for quick cycling
+const ALL_PACK_ITEMS: PosePackItem[] = POSE_PACKS.flatMap(p => p.items);
 
 export default function LiveCoachScreen() {
   const router = useRouter();
@@ -32,103 +35,48 @@ export default function LiveCoachScreen() {
   // Camera permissions
   const [permission, requestPermission] = useCameraPermissions();
 
-  // Camera controls
-  const [facing, setFacing] = useState<CameraType>('front');
+  // Camera settings
+  const [facing, setFacing] = useState<CameraType>('back'); // Default back camera for shooting subjects
   const [flash, setFlash] = useState<FlashMode>('off');
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
   const [countdown, setCountdown] = useState<number | null>(null);
 
-  // Pose selection & overlay display controls
-  const [currentPoseIndex, setCurrentPoseIndex] = useState<number>(0);
-  const [overlayOpacity, setOverlayOpacity] = useState<number>(0.75);
-  const [showPoseOverlay, setShowPoseOverlay] = useState<boolean>(true); // Real-time AR silhouette over camera
-  const [showPoseCard, setShowPoseCard] = useState<boolean>(true); // Floating mini-card
-  const [activeHintIndex, setActiveHintIndex] = useState<number>(0);
+  // Active pose selection (Default: viral Couple Heart Arch from Image 2!)
+  const [activePoseIndex, setActivePoseIndex] = useState<number>(() => {
+    if (params.poseId && typeof params.poseId === 'string') {
+      const foundIdx = ALL_PACK_ITEMS.findIndex(p => p.id === params.poseId);
+      if (foundIdx !== -1) return foundIdx;
+    }
+    const defaultIdx = ALL_PACK_ITEMS.findIndex(p => p.id === 'couple-heart-arch');
+    return defaultIdx !== -1 ? defaultIdx : 0;
+  });
+
+  // Stencil alignment adjustments
+  const [stencilScale, setStencilScale] = useState<number>(1.0); // 0.75x to 1.35x
+  const [stencilOffsetY, setStencilOffsetY] = useState<number>(0); // -80 to +80
+  const [stencilMirrored, setStencilMirrored] = useState<boolean>(false);
+  const [stencilOpacity, setStencilOpacity] = useState<number>(0.9);
+
+  // View modes: 'silhouette' (Image 2 default) vs 'skeleton' (Image 1 technical)
+  const [overlayStyle, setOverlayStyle] = useState<'silhouette' | 'skeleton'>('silhouette');
+  const [showAdjustPanel, setShowAdjustPanel] = useState<boolean>(false);
+  const [showPackModal, setShowPackModal] = useState<boolean>(false);
 
   // Captured photo preview
   const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
   const [showCaptureModal, setShowCaptureModal] = useState<boolean>(false);
 
-  // Landmarks state
-  const [detectedLandmarks, setDetectedLandmarks] = useState<NormalizedLandmark[] | undefined>(undefined);
-  const [isDetecting, setIsDetecting] = useState<boolean>(false);
+  // MediaPipe landmarks
+  const [detectedLandmarks] = useState<NormalizedLandmark[] | undefined>(undefined);
 
-  // Load requested pose if specified in route params
-  useEffect(() => {
-    if (params.poseId && typeof params.poseId === 'string') {
-      const foundIdx = seedPoses.findIndex(p => p.id === params.poseId);
-      if (foundIdx !== -1) {
-        setCurrentPoseIndex(foundIdx);
-      }
-    }
-  }, [params.poseId]);
+  const currentPoseItem: PosePackItem = ALL_PACK_ITEMS[activePoseIndex] || ALL_PACK_ITEMS[0];
 
-  // Handle focus changes: when user navigates away or closes camera, RELEASE hardware resources
+  // Clean hardware lifecycle: release native camera when unfocused
   useEffect(() => {
     if (!isFocused) {
       PoseLandmarkerService.stopDetection();
-      setCountdown(null);
-      setIsDetecting(false);
-    } else {
-      // Re-enable detection if native module is available
-      if (PoseLandmarkerService.isNativeModuleAvailable()) {
-        PoseLandmarkerService.initializeModel().then(ready => {
-          if (ready) {
-            setIsDetecting(true);
-            PoseLandmarkerService.startDetection();
-          }
-        });
-      }
     }
   }, [isFocused]);
-
-  // Subscribe to native landmarker if available
-  useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    if (isFocused && PoseLandmarkerService.isNativeModuleAvailable()) {
-      PoseLandmarkerService.initializeModel().then(ready => {
-        if (ready) {
-          setIsDetecting(true);
-          PoseLandmarkerService.startDetection();
-          unsubscribe = PoseLandmarkerService.addLandmarkListener(landmarks => {
-            setDetectedLandmarks(landmarks);
-          });
-        }
-      });
-    }
-    return () => {
-      if (unsubscribe) unsubscribe();
-      PoseLandmarkerService.stopDetection();
-    };
-  }, [isFocused]);
-
-  const currentPose: Pose = seedPoses[currentPoseIndex] || seedPoses[0];
-
-  // Evaluate alignment
-  const alignmentResult = PoseMatchingService.evaluatePose(
-    detectedLandmarks || [],
-    currentPose
-  );
-
-  // Collect step-by-step instructions into hints
-  const instructionsList: string[] = [];
-  if (currentPose.bodyInstructions.head) instructionsList.push(`Head: ${currentPose.bodyInstructions.head}`);
-  if (currentPose.bodyInstructions.shoulders) instructionsList.push(`Shoulders: ${currentPose.bodyInstructions.shoulders}`);
-  if (currentPose.bodyInstructions.arms) instructionsList.push(`Arms: ${currentPose.bodyInstructions.arms}`);
-  if (currentPose.bodyInstructions.hands) instructionsList.push(`Hands: ${currentPose.bodyInstructions.hands}`);
-  if (currentPose.bodyInstructions.torso) instructionsList.push(`Torso: ${currentPose.bodyInstructions.torso}`);
-  if (currentPose.bodyInstructions.legs) instructionsList.push(`Legs: ${currentPose.bodyInstructions.legs}`);
-  if (currentPose.bodyInstructions.feet) instructionsList.push(`Feet: ${currentPose.bodyInstructions.feet}`);
-  if (currentPose.bodyInstructions.posture) instructionsList.push(`Posture: ${currentPose.bodyInstructions.posture}`);
-  if (instructionsList.length === 0) instructionsList.push('Align your body with the AR skeleton guide on the camera.');
-
-  // Cycle hints every 4 seconds
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveHintIndex(prev => (prev + 1) % instructionsList.length);
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [instructionsList.length]);
 
   // Close camera button handler
   const handleCloseCamera = () => {
@@ -137,15 +85,13 @@ export default function LiveCoachScreen() {
     router.replace('/');
   };
 
-  // Next / Previous pose handlers
+  // Next & Previous pose cycling (floating chevron arrows on camera preview)
   const handleNextPose = () => {
-    setCurrentPoseIndex(prev => (prev + 1) % seedPoses.length);
-    setActiveHintIndex(0);
+    setActivePoseIndex(prev => (prev + 1) % ALL_PACK_ITEMS.length);
   };
 
   const handlePrevPose = () => {
-    setCurrentPoseIndex(prev => (prev - 1 + seedPoses.length) % seedPoses.length);
-    setActiveHintIndex(0);
+    setActivePoseIndex(prev => (prev - 1 + ALL_PACK_ITEMS.length) % ALL_PACK_ITEMS.length);
   };
 
   // Flip camera
@@ -162,7 +108,7 @@ export default function LiveCoachScreen() {
     });
   };
 
-  // Cycle timer (0s -> 3s -> 5s -> 10s)
+  // Cycle timer
   const cycleTimer = () => {
     setTimerSeconds(prev => {
       if (prev === 0) return 3;
@@ -172,33 +118,32 @@ export default function LiveCoachScreen() {
     });
   };
 
-  // Toggle AR overlay mode
-  const cycleOverlayMode = () => {
-    if (showPoseOverlay && showPoseCard) {
-      setShowPoseCard(false); // only full AR overlay
-    } else if (showPoseOverlay && !showPoseCard) {
-      setShowPoseOverlay(false);
-      setShowPoseCard(true); // only mini card
-    } else if (!showPoseOverlay && showPoseCard) {
-      setShowPoseOverlay(false);
-      setShowPoseCard(false); // hide all overlays
-    } else {
-      setShowPoseOverlay(true);
-      setShowPoseCard(true); // show both
-    }
-  };
-
-  // Cycle opacity (0.3 -> 0.5 -> 0.75 -> 0.9)
+  // Cycle opacity
   const cycleOpacity = () => {
-    setOverlayOpacity(prev => {
-      if (prev <= 0.35) return 0.55;
-      if (prev <= 0.6) return 0.75;
-      if (prev <= 0.8) return 0.95;
-      return 0.35;
+    setStencilOpacity(prev => {
+      if (prev >= 0.9) return 0.5;
+      if (prev >= 0.5) return 0.7;
+      return 0.95;
     });
   };
 
-  // Capture photo with timer
+  // Stencil zoom in / out
+  const zoomStencil = (delta: number) => {
+    setStencilScale(prev => {
+      const next = prev + delta;
+      return Math.min(Math.max(next, 0.7), 1.4);
+    });
+  };
+
+  // Stencil move up / down
+  const nudgeOffsetY = (delta: number) => {
+    setStencilOffsetY(prev => {
+      const next = prev + delta;
+      return Math.min(Math.max(next, -120), 120);
+    });
+  };
+
+  // Capture photo
   const handleCapture = async () => {
     if (countdown !== null) return;
 
@@ -224,7 +169,7 @@ export default function LiveCoachScreen() {
     try {
       if (cameraRef.current) {
         const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.85,
+          quality: 0.9,
           skipProcessing: false,
         });
         if (photo?.uri) {
@@ -253,10 +198,7 @@ export default function LiveCoachScreen() {
           <Ionicons name="camera-outline" size={64} color="#2563EB" />
           <Text style={styles.permissionTitle}>Camera Access Needed</Text>
           <Text style={styles.permissionSubtitle}>
-            PoseGenius AI needs access to your camera to give you real-time visual pose coaching and capture photos.
-          </Text>
-          <Text style={styles.permissionNote}>
-            🔒 All camera processing stays on your device. Camera frames and photos are never uploaded without your consent.
+            PoseGenius AI projects aesthetic Korean white contour pose stencils directly on your live camera.
           </Text>
           <TouchableOpacity style={styles.primaryButton} onPress={requestPermission}>
             <Text style={styles.primaryButtonText}>Enable Camera</Text>
@@ -269,10 +211,9 @@ export default function LiveCoachScreen() {
   return (
     <View style={styles.container}>
       {/* 
-        CRITICAL CAMERA LIFECYCLE:
+        CRITICAL NATIVE HARDWARE LIFECYCLE:
         Only mount CameraView when screen is actively focused.
-        When user closes the camera or switches tabs, CameraView is completely
-        unmounted to immediately release native camera hardware and stop battery drain.
+        Unmounts immediately on navigate away or close to stop background camera usage.
       */}
       {isFocused ? (
         <CameraView
@@ -288,30 +229,76 @@ export default function LiveCoachScreen() {
         </View>
       )}
 
-      {/* Real-time AR Target Pose Skeleton & Landmarks Overlay */}
-      {isFocused && (
+      {/* 
+        ========================================================================
+        IMAGE 2 AESTHETIC: WHITE LINE-ART CONTOUR SILHOUETTE OVERLAY
+        Renders crisp, thick white body outline curves with drop shadow filter
+        directly over the camera preview (Heart Arch, Overhead Heart, S-Curve, etc.)
+        ========================================================================
+      */}
+      {isFocused && overlayStyle === 'silhouette' && (
+        <PoseContourSilhouette
+          poseId={currentPoseItem.id}
+          category={currentPoseItem.category}
+          width={SCREEN_WIDTH}
+          height={SCREEN_HEIGHT}
+          strokeColor="#FFFFFF"
+          strokeWidth={3.8}
+          opacity={stencilOpacity}
+          scale={stencilScale}
+          offsetY={stencilOffsetY}
+          mirrored={stencilMirrored}
+          fillColor="rgba(255, 255, 255, 0.05)"
+        />
+      )}
+
+      {/* Optional Technical Skeleton Mode (Image 1 debugging) */}
+      {isFocused && overlayStyle === 'skeleton' && (
         <SkeletonOverlay
           landmarks={detectedLandmarks}
           width={SCREEN_WIDTH}
           height={SCREEN_HEIGHT}
           isFrontCamera={facing === 'front'}
-          isAligned={alignmentResult.isAligned}
-          opacity={overlayOpacity}
-          targetCategory={currentPose.category}
-          targetFraming={currentPose.framing}
-          showTargetGuide={showPoseOverlay}
+          isAligned={false}
+          opacity={stencilOpacity}
+          targetCategory={currentPoseItem.category}
+          showTargetGuide={true}
           showRuleOfThirds={true}
         />
       )}
 
+      {/* 
+        ========================================================================
+        IMAGE 2 FLOATING NAVIGATION ARROWS:
+        Large, elegant floating chevron arrows directly on left & right edges
+        of the viewfinder for one-tap pose switching!
+        ========================================================================
+      */}
+      <TouchableOpacity
+        style={[styles.floatingChevron, styles.floatingChevronLeft]}
+        onPress={handlePrevPose}
+        activeOpacity={0.7}
+        accessibilityLabel="Previous Pose Silhouette"
+      >
+        <Ionicons name="chevron-back" size={38} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.floatingChevron, styles.floatingChevronRight]}
+        onPress={handleNextPose}
+        activeOpacity={0.7}
+        accessibilityLabel="Next Pose Silhouette"
+      >
+        <Ionicons name="chevron-forward" size={38} color="#FFFFFF" />
+      </TouchableOpacity>
+
       {/* Top Controls Bar */}
       <SafeAreaView style={styles.topSafeArea}>
         <View style={styles.topBar}>
-          {/* Close Camera Button (Instantly exits & releases camera) */}
+          {/* Close Camera Button (Instantly halts and releases hardware) */}
           <TouchableOpacity
             style={[styles.iconCircleButton, styles.closeButton]}
             onPress={handleCloseCamera}
-            accessibilityLabel="Close Camera"
           >
             <Ionicons name="close" size={24} color="#FFFFFF" />
           </TouchableOpacity>
@@ -329,26 +316,26 @@ export default function LiveCoachScreen() {
 
           {/* Timer Toggle */}
           <TouchableOpacity style={styles.iconCircleButton} onPress={cycleTimer}>
-            <Ionicons name="timer-outline" size={20} color={timerSeconds > 0 ? '#38BDF8' : '#FFFFFF'} />
+            <Ionicons
+              name="timer-outline"
+              size={20}
+              color={timerSeconds > 0 ? '#38BDF8' : '#FFFFFF'}
+            />
             {timerSeconds > 0 && <Text style={styles.timerBadgeText}>{timerSeconds}s</Text>}
           </TouchableOpacity>
 
-          {/* AR Overlay Mode Toggle */}
-          <TouchableOpacity
-            style={[styles.iconCircleButton, showPoseOverlay && styles.activeButton]}
-            onPress={cycleOverlayMode}
-          >
-            <Ionicons
-              name={showPoseOverlay ? 'body' : 'body-outline'}
-              size={20}
-              color={showPoseOverlay ? '#38BDF8' : '#FFFFFF'}
-            />
-          </TouchableOpacity>
-
-          {/* Overlay Opacity Toggle */}
+          {/* Opacity Cycle */}
           <TouchableOpacity style={styles.iconCircleButton} onPress={cycleOpacity}>
             <Ionicons name="eye-outline" size={20} color="#FFFFFF" />
-            <Text style={styles.timerBadgeText}>{Math.round(overlayOpacity * 100)}%</Text>
+            <Text style={styles.timerBadgeText}>{Math.round(stencilOpacity * 100)}%</Text>
+          </TouchableOpacity>
+
+          {/* Stencil Alignment Quick Controls Toggle */}
+          <TouchableOpacity
+            style={[styles.iconCircleButton, showAdjustPanel && styles.activeButton]}
+            onPress={() => setShowAdjustPanel(prev => !prev)}
+          >
+            <Ionicons name="options-outline" size={20} color="#FFFFFF" />
           </TouchableOpacity>
 
           {/* Flip Camera */}
@@ -357,74 +344,145 @@ export default function LiveCoachScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Live Coaching Hint & Real-time Alignment Banner */}
-        <View style={styles.coachingBanner}>
-          <View style={styles.coachingHeader}>
-            <View style={styles.liveIndicator}>
-              <View
+        {/* Top Active Pose Title Pill */}
+        <TouchableOpacity
+          style={styles.poseTitlePill}
+          onPress={() => setShowPackModal(true)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.posePillLeft}>
+            <Text style={styles.posePillKorean}>{currentPoseItem.koreanTitle}</Text>
+            <Text style={styles.posePillTitle}>{currentPoseItem.title}</Text>
+          </View>
+          <View style={styles.posePillButton}>
+            <Ionicons name="grid-outline" size={14} color="#FFFFFF" />
+            <Text style={styles.posePillButtonText}>Packs</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* Quick Stencil Adjustments Drawer (Scale, Offset, Mirror) */}
+        {showAdjustPanel && (
+          <View style={styles.adjustPanel}>
+            <View style={styles.adjustRow}>
+              <Text style={styles.adjustLabel}>Size</Text>
+              <View style={styles.adjustButtonGroup}>
+                <TouchableOpacity
+                  style={styles.adjustMiniButton}
+                  onPress={() => zoomStencil(-0.1)}
+                >
+                  <Ionicons name="remove" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+                <Text style={styles.adjustValueText}>{Math.round(stencilScale * 100)}%</Text>
+                <TouchableOpacity
+                  style={styles.adjustMiniButton}
+                  onPress={() => zoomStencil(0.1)}
+                >
+                  <Ionicons name="add" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.adjustLabel, { marginLeft: 16 }]}>Height</Text>
+              <View style={styles.adjustButtonGroup}>
+                <TouchableOpacity
+                  style={styles.adjustMiniButton}
+                  onPress={() => nudgeOffsetY(-20)}
+                >
+                  <Ionicons name="arrow-up" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.adjustMiniButton}
+                  onPress={() => nudgeOffsetY(20)}
+                >
+                  <Ionicons name="arrow-down" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
                 style={[
-                  styles.pulseDot,
-                  alignmentResult.isAligned ? styles.pulseDotGreen : styles.pulseDotCyan,
+                  styles.mirrorButton,
+                  stencilMirrored && { backgroundColor: '#F43F5E' },
                 ]}
-              />
-              <Text style={styles.liveStatusText}>
-                {alignmentResult.isAligned ? 'PERFECT ALIGNMENT' : 'REAL-TIME POSE COACH'}
-              </Text>
+                onPress={() => setStencilMirrored(prev => !prev)}
+              >
+                <Ionicons name="swap-horizontal" size={16} color="#FFFFFF" />
+                <Text style={styles.mirrorButtonText}>Flip</Text>
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.headerBadges}>
-              <Text style={styles.framingBadge}>{currentPose.framing.toUpperCase()}</Text>
+            {/* Mode switch: Silhouette vs Skeleton */}
+            <View style={styles.modeSwitchRow}>
+              <TouchableOpacity
+                style={[
+                  styles.modeTab,
+                  overlayStyle === 'silhouette' && styles.activeModeTab,
+                ]}
+                onPress={() => setOverlayStyle('silhouette')}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    overlayStyle === 'silhouette' && styles.activeModeTabText,
+                  ]}
+                >
+                  White Silhouette (Image 2)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.modeTab,
+                  overlayStyle === 'skeleton' && styles.activeModeTab,
+                ]}
+                onPress={() => setOverlayStyle('skeleton')}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    overlayStyle === 'skeleton' && styles.activeModeTabText,
+                  ]}
+                >
+                  AR Skeleton
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
-
-          <Text style={styles.coachingHintText} numberOfLines={2}>
-            {instructionsList[activeHintIndex]}
-          </Text>
-        </View>
+        )}
       </SafeAreaView>
 
-      {/* Floating Pose Reference Card (Toggled via Overlay Mode button) */}
-      {showPoseCard && (
-        <View style={[styles.floatingCard, { opacity: overlayOpacity }]}>
-          <View style={styles.floatingCardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.floatingCardTitle} numberOfLines={1}>
-                {currentPose.title}
-              </Text>
-              <Text style={styles.floatingCardMeta}>
-                {currentPose.category} • {currentPose.cameraAngle}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setShowPoseCard(false)}>
-              <Ionicons name="close-circle" size={20} color="rgba(255, 255, 255, 0.7)" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.stickFigureContainer}>
-            <PoseStickFigure
-              category={currentPose.category}
-              framing={currentPose.framing}
-              size={110}
-              color="#38BDF8"
-              accentColor="#F43F5E"
-            />
-          </View>
-        </View>
-      )}
-
-      {/* Countdown Overlay Animation */}
+      {/* Countdown Animation */}
       {countdown !== null && (
         <View style={styles.countdownContainer}>
           <Text style={styles.countdownText}>{countdown}</Text>
         </View>
       )}
 
-      {/* Bottom Controls Bar */}
+      {/* 
+        ========================================================================
+        BOTTOM CONTROLS BAR:
+        - Pose Pack / Shop Catalog button (opens Image 2 modal!)
+        - Large Shutter Capture button
+        - Flip Camera / Stencil Thumbnail
+        ========================================================================
+      */}
       <View style={styles.bottomBar}>
-        {/* Previous Pose */}
-        <TouchableOpacity style={styles.cyclePoseButton} onPress={handlePrevPose}>
-          <Ionicons name="chevron-back" size={24} color="#FFFFFF" />
-          <Text style={styles.cyclePoseText}>Prev</Text>
+        {/* Open Pose Pack Catalog Button (Matching left screen in Image 2) */}
+        <TouchableOpacity
+          style={styles.packCatalogButton}
+          onPress={() => setShowPackModal(true)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.packCatalogThumbnailBox}>
+            <PoseOutlineThumbnail
+              poseId={currentPoseItem.id}
+              size={36}
+              strokeColor="#FFFFFF"
+              strokeWidth={3}
+            />
+          </View>
+          <View style={{ marginLeft: 8 }}>
+            <Text style={styles.packCatalogButtonTitle}>SHOP</Text>
+            <Text style={styles.packCatalogButtonSubtitle}>Pose Packs</Text>
+          </View>
         </TouchableOpacity>
 
         {/* Shutter Capture Button */}
@@ -436,12 +494,37 @@ export default function LiveCoachScreen() {
           <View style={styles.captureButtonInner} />
         </TouchableOpacity>
 
-        {/* Next Pose */}
-        <TouchableOpacity style={styles.cyclePoseButton} onPress={handleNextPose}>
-          <Text style={styles.cyclePoseText}>Next</Text>
-          <Ionicons name="chevron-forward" size={24} color="#FFFFFF" />
+        {/* Stencil Reset / Reset Position */}
+        <TouchableOpacity
+          style={styles.resetButton}
+          onPress={() => {
+            setStencilScale(1.0);
+            setStencilOffsetY(0);
+            setStencilMirrored(false);
+          }}
+        >
+          <Ionicons name="refresh-outline" size={20} color="#FFFFFF" />
+          <Text style={styles.resetButtonText}>Reset</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 
+        ========================================================================
+        IMAGE 2 POSE PACK SELECTOR MODAL:
+        Clean minimalist Korean pose shop modal with 3x3 pose sketch grid!
+        ========================================================================
+      */}
+      <PosePackSelectorModal
+        visible={showPackModal}
+        selectedPoseId={currentPoseItem.id}
+        onSelectPose={(item: PosePackItem) => {
+          const idx = ALL_PACK_ITEMS.findIndex(p => p.id === item.id);
+          if (idx !== -1) {
+            setActivePoseIndex(idx);
+          }
+        }}
+        onClose={() => setShowPackModal(false)}
+      />
 
       {/* Captured Photo Modal Preview */}
       <Modal visible={showCaptureModal} animationType="slide" transparent={true}>
@@ -450,7 +533,7 @@ export default function LiveCoachScreen() {
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>Photo Captured! 📸</Text>
-                <Text style={styles.modalSubtitle}>Pose: {currentPose.title}</Text>
+                <Text style={styles.modalSubtitle}>{currentPoseItem.koreanTitle} • {currentPoseItem.title}</Text>
               </View>
               <TouchableOpacity onPress={() => setShowCaptureModal(false)}>
                 <Ionicons name="close" size={24} color="#1E293B" />
@@ -532,16 +615,7 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     textAlign: 'center',
     lineHeight: 22,
-    marginBottom: 16,
-  },
-  permissionNote: {
-    fontSize: 13,
-    color: '#CBD5E1',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    padding: 12,
-    borderRadius: 12,
     marginBottom: 24,
-    lineHeight: 18,
   },
   permissionText: {
     color: '#F8FAFC',
@@ -560,12 +634,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  floatingChevron: {
+    position: 'absolute',
+    top: '46%',
+    width: 52,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 25,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+  },
+  floatingChevronLeft: {
+    left: 12,
+  },
+  floatingChevronRight: {
+    right: 12,
+  },
   topSafeArea: {
     position: 'absolute',
     top: Platform.OS === 'android' ? 24 : 10,
     left: 0,
     right: 0,
-    zIndex: 20,
+    zIndex: 30,
     paddingHorizontal: 16,
   },
   topBar: {
@@ -583,11 +678,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   closeButton: {
-    backgroundColor: 'rgba(239, 68, 68, 0.7)',
+    backgroundColor: 'rgba(239, 68, 68, 0.75)',
   },
   activeButton: {
     borderWidth: 1.5,
-    borderColor: '#38BDF8',
+    borderColor: '#F43F5E',
   },
   timerBadgeText: {
     position: 'absolute',
@@ -596,93 +691,125 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
   },
-  coachingBanner: {
+  poseTitlePill: {
     marginTop: 8,
-    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    borderRadius: 24,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  posePillLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  posePillKorean: {
+    color: '#F43F5E',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  posePillTitle: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  posePillButton: {
+    marginLeft: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  posePillButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  adjustPanel: {
+    marginTop: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
   },
-  coachingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  liveIndicator: {
+  adjustRow: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  pulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  pulseDotCyan: {
-    backgroundColor: '#00E5FF',
-  },
-  pulseDotGreen: {
-    backgroundColor: '#34C759',
-  },
-  liveStatusText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#38BDF8',
-    letterSpacing: 0.5,
-  },
-  headerBadges: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  framingBadge: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#F8FAFC',
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  coachingHintText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '500',
-    lineHeight: 18,
-  },
-  floatingCard: {
-    position: 'absolute',
-    right: 16,
-    bottom: 130,
-    width: 130,
-    backgroundColor: 'rgba(15, 23, 42, 0.88)',
-    borderRadius: 16,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    zIndex: 15,
-  },
-  floatingCardHeader: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 4,
   },
-  floatingCardTitle: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  floatingCardMeta: {
+  adjustLabel: {
     color: '#94A3B8',
-    fontSize: 9,
-    marginTop: 2,
-    textTransform: 'capitalize',
+    fontSize: 12,
+    fontWeight: '600',
   },
-  stickFigureContainer: {
+  adjustButtonGroup: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 2,
+    marginLeft: 6,
+  },
+  adjustMiniButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  adjustValueText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 6,
+  },
+  mirrorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 4,
+    marginLeft: 10,
+  },
+  mirrorButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  modeSwitchRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+    gap: 8,
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  activeModeTab: {
+    backgroundColor: '#F43F5E',
+  },
+  modeTabText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  activeModeTabText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   countdownContainer: {
     ...StyleSheet.absoluteFill,
@@ -705,24 +832,39 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    zIndex: 20,
+    paddingHorizontal: 24,
+    zIndex: 30,
   },
-  cyclePoseButton: {
+  packCatalogButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
     borderRadius: 24,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
-  cyclePoseText: {
+  packCatalogThumbnailBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  packCatalogButtonTitle: {
+    color: '#F43F5E',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  packCatalogButtonSubtitle: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginHorizontal: 4,
+    fontSize: 12,
+    fontWeight: '700',
   },
   captureButtonOuter: {
     width: 80,
@@ -732,6 +874,10 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
   },
   captureButtonDisabled: {
     opacity: 0.5,
@@ -742,9 +888,25 @@ const styles = StyleSheet.create({
     borderRadius: 32,
     backgroundColor: '#FFFFFF',
   },
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  resetButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -792,21 +954,19 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     gap: 6,
   },
+  modalSecondaryButton: {
+    backgroundColor: '#F1F5F9',
+  },
+  modalSecondaryButtonText: {
+    color: '#2563EB',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   modalPrimaryButton: {
     backgroundColor: '#2563EB',
   },
   modalPrimaryButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  modalSecondaryButton: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-  },
-  modalSecondaryButtonText: {
-    color: '#2563EB',
     fontSize: 15,
     fontWeight: '600',
   },

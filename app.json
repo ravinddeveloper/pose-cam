@@ -24,7 +24,8 @@
       "package": "com.posegenius.ai",
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -41,6 +42,12 @@
           "cameraPermission": "Allow PoseGenius AI to access your camera to provide live pose guidance and capture photos."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "44b55e6f-58a7-4722-9b9b-bb8652a4451f"
+      }
+    }
   }
 }

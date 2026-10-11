@@ -39,10 +39,6 @@ export default function PoseDetailScreen() {
   const [isFavorite, setIsFavorite] = useState(false);
   const [similarPoses, setSimilarPoses] = useState<Pose[]>([]);
 
-  useEffect(() => {
-    loadPose();
-  }, [id]);
-
   const loadPose = async () => {
     const foundPose = seedPoses.find(p => p.id === id);
     if (foundPose) {
@@ -54,6 +50,10 @@ export default function PoseDetailScreen() {
       setSimilarPoses(similar);
     }
   };
+
+  useEffect(() => {
+    loadPose();
+  }, [id]);
 
   const toggleFavorite = async () => {
     if (!pose) return;

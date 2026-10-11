@@ -46,11 +46,6 @@ export default function HomeScreen() {
   const [featuredPoses, setFeaturedPoses] = useState<Pose[]>([]);
   const [recentPoses, setRecentPoses] = useState<Pose[]>([]);
 
-  useEffect(() => {
-    loadFeaturedPoses();
-    loadRecentPoses();
-  }, []);
-
   const loadFeaturedPoses = () => {
     // Top beginner and intermediate poses
     const curated = seedPoses.filter(p => p.difficulty === 'beginner' || p.difficulty === 'intermediate').slice(0, 8);
@@ -66,6 +61,11 @@ export default function HomeScreen() {
       console.warn('Error loading recent poses:', error);
     }
   };
+
+  useEffect(() => {
+    loadFeaturedPoses();
+    loadRecentPoses();
+  }, []);
 
   const handleSearch = () => {
     if (searchQuery.trim()) {
@@ -253,7 +253,7 @@ export default function HomeScreen() {
           <View style={{ flex: 1, marginLeft: 14 }}>
             <Text style={styles.aiPromoTitle}>AI Pose Coach (Offline & Free)</Text>
             <Text style={styles.aiPromoDescription}>
-              Ask natural requests like "Solo travel in a blue dress near a waterfall" for instant personalized tips.
+              {'Ask natural requests like "Solo travel in a blue dress near a waterfall" for instant personalized tips.'}
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#94A3B8" />

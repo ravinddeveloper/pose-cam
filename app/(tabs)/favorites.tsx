@@ -36,10 +36,6 @@ export default function FavoritesScreen() {
   const [favoritePoses, setFavoritePoses] = useState<Pose[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadFavorites();
-  }, []);
-
   const loadFavorites = async () => {
     try {
       setLoading(true);
@@ -52,6 +48,10 @@ export default function FavoritesScreen() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadFavorites();
+  }, []);
 
   const removeFavorite = async (poseId: string) => {
     try {

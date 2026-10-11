@@ -386,7 +386,7 @@ export default function ExploreScreen() {
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
                   <Ionicons name="images-outline" size={48} color="#CBD5E1" />
-                  <Text style={styles.emptyText}>No online results for "{onlineQuery}"</Text>
+                  <Text style={styles.emptyText}>{`No online results for "${onlineQuery}"`}</Text>
                   <TouchableOpacity
                     style={styles.resetButton}
                     onPress={() => OnlineDiscoveryService.openExternalWebSearch(onlineQuery)}

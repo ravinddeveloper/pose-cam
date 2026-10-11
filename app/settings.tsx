@@ -30,10 +30,6 @@ export default function SettingsScreen() {
   const [enableWikimedia, setEnableWikimedia] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    loadSettings();
-  }, []);
-
   const loadSettings = async () => {
     try {
       const onlineAi = await AsyncStorage.getItem('ai_online_enabled');
@@ -53,6 +49,10 @@ export default function SettingsScreen() {
       console.warn('Error loading settings:', e);
     }
   };
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
 
   const saveSettings = async () => {
     setIsSaving(true);

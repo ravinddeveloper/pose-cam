@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Pose } from '../types/pose';
 
 const FAVORITES_KEY = '@posegenius_favorites';
 const RECENT_POSES_KEY = '@posegenius_recent';

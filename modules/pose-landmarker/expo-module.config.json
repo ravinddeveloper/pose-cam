@@ -1,0 +1,7 @@
+{
+  "name": "pose-landmarker",
+  "platforms": ["android"],
+  "android": {
+    "modules": ["com.posegenius.poselandmarker.PoseLandmarkerModule"]
+  }
+}
